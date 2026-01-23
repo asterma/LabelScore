@@ -386,7 +386,7 @@ export default function SessionDetailPage() {
       <div className="detail-stage">
         <div className="detail-layout">
         <div className="image-container">
-          <div className="image-wrapper">
+          <div className="image-wrapper" onWheel={handleZoomWheel}>
             <div className="image-split">
               <div
                 className="image-panel"

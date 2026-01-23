@@ -601,6 +601,7 @@ a {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 .image-wrapper {
@@ -610,6 +611,7 @@ a {
   display: flex;
   overflow: hidden;
   min-height: 0;
+  overscroll-behavior: contain;
 }
 
 .image-split {
@@ -629,6 +631,7 @@ a {
   overflow: hidden;
   min-height: 0;
   cursor: grab;
+  overscroll-behavior: contain;
 }
 
 .image-frame {

@@ -40,7 +40,7 @@ export default function LoginPage() {
         <form className="form-stack" onSubmit={handleSubmit}>
           {error && <div className="form-error">{error}</div>}
 
-          <div>
+          <div className="form-field">
             <label className="form-label">用户名</label>
             <input
               type="text"
@@ -52,7 +52,7 @@ export default function LoginPage() {
             />
           </div>
 
-          <div>
+          <div className="form-field">
             <label className="form-label">密码</label>
             <input
               type="password"

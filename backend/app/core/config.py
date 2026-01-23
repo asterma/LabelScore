@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 60 * 24  # 24 hours
 
     # File paths
-    images_root_dir: str = "/Volumes/ShareFolder-1/BMW/raw"
+    images_root_dir: str = "/media/NAS/new_data/BMW/raw"
     upload_dir: str = "./data/uploads"
     max_upload_size: int = 50 * 1024 * 1024  # 50MB
 

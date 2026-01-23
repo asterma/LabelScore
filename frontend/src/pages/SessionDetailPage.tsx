@@ -189,7 +189,7 @@ export default function SessionDetailPage() {
     const delta = e.deltaY < 0 ? 1.1 : 0.9
     setZoom((prev) => {
       const next = prev * delta
-      return Math.max(0.4, Math.min(4, next))
+      return Math.max(0.4, Math.min(8, next))
     })
   }
 

@@ -235,17 +235,20 @@ export default function SessionDetailPage() {
         is_undecidable: false,
       })
 
-      // Refresh session data
       await loadSession()
+      const updated = await getAnnotation(currentAnnotation.id)
+      setCurrentAnnotation(updated)
 
-      // Move to next unannotated or next image
-      if (currentAnnotation.next_unannotated_id) {
-        await loadAnnotation(currentAnnotation.next_unannotated_id)
-      } else if (currentAnnotation.next_id) {
-        await loadAnnotation(currentAnnotation.next_id)
-      } else {
-        // Refresh current annotation
-        await loadAnnotation(currentAnnotation.id)
+      const readyToAdvance =
+        (updated.score !== null || updated.is_undecidable) &&
+        updated.difficulty !== 'default'
+
+      if (readyToAdvance) {
+        if (updated.next_unannotated_id) {
+          await loadAnnotation(updated.next_unannotated_id)
+        } else if (updated.next_id) {
+          await loadAnnotation(updated.next_id)
+        }
       }
     } catch (err) {
       console.error('Failed to update score:', err)
@@ -264,13 +267,19 @@ export default function SessionDetailPage() {
       })
 
       await loadSession()
+      const updated = await getAnnotation(currentAnnotation.id)
+      setCurrentAnnotation(updated)
 
-      if (currentAnnotation.next_unannotated_id) {
-        await loadAnnotation(currentAnnotation.next_unannotated_id)
-      } else if (currentAnnotation.next_id) {
-        await loadAnnotation(currentAnnotation.next_id)
-      } else {
-        await loadAnnotation(currentAnnotation.id)
+      const readyToAdvance =
+        (updated.score !== null || updated.is_undecidable) &&
+        updated.difficulty !== 'default'
+
+      if (readyToAdvance) {
+        if (updated.next_unannotated_id) {
+          await loadAnnotation(updated.next_unannotated_id)
+        } else if (updated.next_id) {
+          await loadAnnotation(updated.next_id)
+        }
       }
     } catch (err) {
       console.error('Failed to mark undecidable:', err)
@@ -284,7 +293,20 @@ export default function SessionDetailPage() {
     setIsUpdating(true)
     try {
       await updateAnnotation(currentAnnotation.id, { difficulty: level })
-      await loadAnnotation(currentAnnotation.id)
+      const updated = await getAnnotation(currentAnnotation.id)
+      setCurrentAnnotation(updated)
+
+      const readyToAdvance =
+        (updated.score !== null || updated.is_undecidable) &&
+        updated.difficulty !== 'default'
+
+      if (readyToAdvance) {
+        if (updated.next_unannotated_id) {
+          await loadAnnotation(updated.next_unannotated_id)
+        } else if (updated.next_id) {
+          await loadAnnotation(updated.next_id)
+        }
+      }
     } catch (err) {
       console.error('Failed to update difficulty:', err)
     } finally {

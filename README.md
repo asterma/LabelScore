@@ -67,7 +67,7 @@ LabelScore/
 cd backend
 
 # 创建虚拟环境
-python -m venv .venv
+python -m venv .venv --prompt LabelScore
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
 # 安装依赖

@@ -24,7 +24,7 @@ export default function LoginPage() {
         err instanceof Error
           ? err.message
           : (err as { response?: { data?: { detail?: string } } })?.response?.data
-              ?.detail || '登录失败，请检查用户名和密码'
+              ?.detail || 'Login failed. Check username and password.'
       setError(errorMessage)
     } finally {
       setIsLoading(false)
@@ -35,31 +35,31 @@ export default function LoginPage() {
     <div className="login-shell">
       <div className="login-card">
         <h1 className="login-title">LabelScore</h1>
-        <p className="login-subtitle">图像标注质量评估系统</p>
+        <p className="login-subtitle">Image Annotation Quality Review</p>
 
         <form className="form-stack" onSubmit={handleSubmit}>
           {error && <div className="form-error">{error}</div>}
 
           <div className="form-field">
-            <label className="form-label">用户名</label>
+            <label className="form-label">Username</label>
             <input
               type="text"
               className="input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="请输入用户名"
+              placeholder="Enter username"
               required
             />
           </div>
 
           <div className="form-field">
-            <label className="form-label">密码</label>
+            <label className="form-label">Password</label>
             <input
               type="password"
               className="input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="请输入密码"
+              placeholder="Enter password"
               required
             />
           </div>
@@ -69,7 +69,7 @@ export default function LoginPage() {
             className={`btn btn-primary ${isLoading ? 'btn-disabled' : ''}`}
             disabled={isLoading}
           >
-            {isLoading ? '登录中...' : '登录'}
+            {isLoading ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
       </div>

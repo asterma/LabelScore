@@ -34,5 +34,14 @@ def get_db():
 
 def init_db():
     """Initialize database tables."""
-    from app.models import user, session, annotation  # noqa: F401
+    # 导入所有模型以确保表被创建
+    from app.models import (  # noqa: F401
+        User,
+        Session,
+        ProcessingVersion,
+        Slice,
+        GTVersion,
+        Artifact,
+        Review,
+    )
     Base.metadata.create_all(bind=engine)

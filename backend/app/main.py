@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import init_db, SessionLocal
-from app.api.routes import auth, sessions, annotations, images, scan, export
+from app.api.routes import auth, scan, sessions, review
 from app.services.auth import create_default_admin
 
 
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LabelScore API",
     description="图像标注质量评估 API",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -52,11 +52,9 @@ app.add_middleware(
 
 # Register routers
 app.include_router(auth.router, prefix="/api")
-app.include_router(sessions.router, prefix="/api")
-app.include_router(annotations.router, prefix="/api")
-app.include_router(images.router, prefix="/api")
 app.include_router(scan.router, prefix="/api")
-app.include_router(export.router, prefix="/api")
+app.include_router(sessions.router, prefix="/api")
+app.include_router(review.router, prefix="/api")
 
 
 @app.get("/health")

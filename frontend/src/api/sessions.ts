@@ -1,33 +1,66 @@
 import api from './client'
-import type {
-  Session,
-  SessionListResponse,
-  SessionFilter,
-  SessionStats,
-  ImageListResponse,
-} from '../types'
 
-export async function getSessions(
-  params: SessionFilter & { page?: number; page_size?: number } = {}
-): Promise<SessionListResponse> {
-  const response = await api.get<SessionListResponse>('/sessions', { params })
-  return response.data
+export interface SessionItem {
+  id: number
+  license_plate: string
+  date: string
+  session_uuid: string
+  processing_versions: number
+  slice_count: number
+  review_count: number
+  reviewed_count: number
 }
 
-export async function getSession(sessionId: number): Promise<Session> {
-  const response = await api.get<Session>(`/sessions/${sessionId}`)
-  return response.data
+export interface SessionsResponse {
+  items: SessionItem[]
+  total: number
+  page: number
+  page_size: number
 }
 
-export async function getSessionImages(
-  sessionId: number,
-  page: number = 1,
-  pageSize: number = 100
-): Promise<ImageListResponse> {
-  const response = await api.get<ImageListResponse>(
-    `/sessions/${sessionId}/images`,
-    { params: { page, page_size: pageSize } }
-  )
+export interface SessionStats {
+  total_sessions: number
+  total_processing_versions: number
+  total_slices: number
+  total_gt_versions: number
+  total_artifacts: number
+  total_reviews: number
+  reviewed_count: number
+  completion_rate: number
+}
+
+export interface GTVersionInfo {
+  id: number
+  gt_type: string
+  version_tag: string
+  dir_name: string
+}
+
+export interface ProcessingVersionInfo {
+  id: number
+  dir_name: string
+  software_version: string
+  processing_date: string
+  processing_time?: string | null
+  slice_count: number
+  gt_versions: GTVersionInfo[]
+}
+
+export interface SessionDetail {
+  id: number
+  license_plate: string
+  date: string
+  session_uuid: string
+  raw_root_path: string
+  processing_versions: ProcessingVersionInfo[]
+}
+
+export async function getSessions(params: {
+  page?: number
+  page_size?: number
+  license_plate?: string
+}): Promise<SessionsResponse> {
+  const response = await api.get<SessionsResponse>('/sessions', { params })
   return response.data
 }
 
@@ -36,23 +69,7 @@ export async function getStats(): Promise<SessionStats> {
   return response.data
 }
 
-export async function addSessionPath(session_path: string): Promise<{
-  status?: string
-  error?: string
-  sessions_found?: number
-  images_found?: number
-}> {
-  const response = await api.post('/scan/session', { session_path })
-  return response.data
-}
-
-export async function getScanStatus(): Promise<{
-  is_running: boolean
-  progress: number
-  total: number
-  sessions_found: number
-  images_found: number
-}> {
-  const response = await api.get('/scan/status')
+export async function getSession(sessionId: number): Promise<SessionDetail> {
+  const response = await api.get<SessionDetail>(`/sessions/${sessionId}`)
   return response.data
 }

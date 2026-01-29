@@ -6,6 +6,8 @@ import LoginPage from './pages/LoginPage'
 import HomePage from './pages/HomePage'
 import SessionDetailPage from './pages/SessionDetailPage'
 import ExportPage from './pages/ExportPage'
+import ScanPage from './pages/ScanPage'
+import ReviewPage from './pages/ReviewPage'
 
 function ProtectedRoute() {
   const { user, isLoading } = useAuth()
@@ -50,7 +52,10 @@ function AppRoutes() {
           }
         >
           <Route path="/" element={<HomePage />} />
+          <Route path="/scan" element={<ScanPage />} />
           <Route path="/session/:sessionId" element={<SessionDetailPage />} />
+          <Route path="/session/:sessionId/review/:sliceId" element={<ReviewPage />} />
+          <Route path="/review/:sliceId" element={<ReviewPage />} />
           <Route path="/export" element={<ExportPage />} />
         </Route>
       </Route>

@@ -12,17 +12,20 @@ export function Header() {
 
       <nav className="app-nav">
         <Link to="/" className="app-link">
-          Session 列表
+          Sessions
+        </Link>
+        <Link to="/scan" className="app-link">
+          Scan Data
         </Link>
         <Link to="/export" className="app-link">
-          数据导出
+          Export
         </Link>
       </nav>
 
       <div className="app-user">
         <span>{user?.display_name || user?.username}</span>
         <button className="btn btn-ghost" onClick={logout}>
-          退出
+          Logout
         </button>
       </div>
     </header>

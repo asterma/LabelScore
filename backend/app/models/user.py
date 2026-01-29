@@ -17,4 +17,4 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    annotations = relationship("Annotation", back_populates="annotator")
+    reviews = relationship("Review", back_populates="reviewer")

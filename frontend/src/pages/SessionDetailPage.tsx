@@ -1,635 +1,875 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
-import { getSession, getSessionImages } from '../api/sessions'
-import { getAnnotation, updateAnnotation, getNextUnannotated } from '../api/annotations'
-import { useKeyboard } from '../hooks/useKeyboard'
+import { useState, useEffect, useMemo } from 'react'
+import { useParams, Link, useNavigate } from 'react-router-dom'
+import { getSession, SessionDetail, ProcessingVersionInfo } from '../api/sessions'
+import {
+  getSlicesForReview,
+  getSliceDetail,
+  updateReview,
+  SlicesResponse,
+  SliceDetail,
+  ArtifactInfo,
+  getArtifactUrl,
+} from '../api/review'
+import { scanSession } from '../api/scan'
 import { Loading } from '../components/common/Loading'
-import type { Session, Annotation, AnnotationWithNavigation } from '../types'
+import { useKeyboard } from '../hooks/useKeyboard'
 
+type ReviewTab = 'preprocessing' | 'gt'
 
+type DifficultyLevel = 'default' | 'easy' | 'median' | 'hard' | 'Error'
 
-const SCORE_LABELS: Record<number, string> = {
-  1: '很差',
-  2: '较差',
-  3: '一般',
-  4: '较好',
-  5: '优秀',
+const difficultyLabels: Record<DifficultyLevel, string> = {
+  default: 'Default',
+  easy: 'Easy',
+  median: 'Medium',
+  hard: 'Hard',
+  Error: 'Error',
 }
+
+const isDisplayable = (artifact: ArtifactInfo) =>
+  artifact.file_type === 'image' || artifact.file_type === 'video'
+
+const pickPreferredPrepArtifact = (artifacts: ArtifactInfo[]) => {
+  const lowerNames = artifacts.map((a) => ({ artifact: a, name: a.file_name.toLowerCase() }))
+  const findMatch = (base: string) =>
+    lowerNames.find((item) =>
+      item.name.endsWith(`${base}.jpg`) ||
+      item.name.endsWith(`${base}.jpeg`) ||
+      item.name.endsWith(`${base}.png`)
+    )?.artifact
+
+  return (
+    findMatch('driving_line') ||
+    findMatch('labelling') ||
+    artifacts[0] ||
+    null
+  )
+}
+
+const isUnreviewed = (review: {
+  score: number | null
+  is_undecidable: boolean
+} | null) => !review || (review.score === null && !review.is_undecidable)
 
 export default function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
-
-  const [session, setSession] = useState<Session | null>(null)
-  const [images, setImages] = useState<Annotation[]>([])
-  const [currentAnnotation, setCurrentAnnotation] =
-    useState<AnnotationWithNavigation | null>(null)
+  const [session, setSession] = useState<SessionDetail | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [scanStatus, setScanStatus] = useState<string | null>(null)
+  const [isScanning, setIsScanning] = useState(false)
+
+  const [selectedPvId, setSelectedPvId] = useState<number | null>(null)
+  const [slicesData, setSlicesData] = useState<SlicesResponse | null>(null)
+  const [slicesLoading, setSlicesLoading] = useState(false)
+  const [slicePage, setSlicePage] = useState(1)
+  const [filterStatus, setFilterStatus] = useState('')
+
+  const [selectedSliceId, setSelectedSliceId] = useState<number | null>(null)
+  const [detail, setDetail] = useState<SliceDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+
+  const [activeTab, setActiveTab] = useState<ReviewTab>('preprocessing')
+  const [activeGtIndex, setActiveGtIndex] = useState(0)
+  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactInfo | null>(null)
   const [isUpdating, setIsUpdating] = useState(false)
-  const [imageUrl, setImageUrl] = useState<string | null>(null)
-  const [isImageLoading, setIsImageLoading] = useState(false)
-  const [imageError, setImageError] = useState<string | null>(null)
-  const [intensityUrl, setIntensityUrl] = useState<string | null>(null)
-  const [isIntensityLoading, setIsIntensityLoading] = useState(false)
-  const [intensityError, setIntensityError] = useState<string | null>(null)
-  const [zoom, setZoom] = useState(1)
-  const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 })
-  const [pan, setPan] = useState({ x: 0, y: 0 })
-  const [isSpaceDown, setIsSpaceDown] = useState(false)
-  const [isPanning, setIsPanning] = useState(false)
-  const panStart = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
 
-  const loadSession = useCallback(async () => {
-    if (!sessionId) return
-    try {
-      const [sessionData, imagesData] = await Promise.all([
-        getSession(parseInt(sessionId)),
-        getSessionImages(parseInt(sessionId)),
-      ])
-      setSession(sessionData)
-      setImages(imagesData.items)
-      return imagesData.items
-    } catch (err) {
-      console.error('Failed to load session:', err)
-      navigate('/')
-    }
-  }, [sessionId, navigate])
+  const pageSize = 50
 
-  const loadAnnotation = useCallback(async (annotationId: number) => {
-    try {
-      const data = await getAnnotation(annotationId)
-      setCurrentAnnotation(data)
-    } catch (err) {
-      console.error('Failed to load annotation:', err)
-    }
-  }, [])
-
-  // Initial load
   useEffect(() => {
-    const init = async () => {
+    const loadSession = async () => {
+      if (!sessionId) return
       setIsLoading(true)
-      const loadedImages = await loadSession()
-      if (loadedImages && loadedImages.length > 0) {
-        // Try to get next unannotated, otherwise load first image
-        const nextUnannotated = await getNextUnannotated(parseInt(sessionId!))
-        if (nextUnannotated) {
-          await loadAnnotation(nextUnannotated.id)
-        } else {
-          await loadAnnotation(loadedImages[0].id)
-        }
+      try {
+        const data = await getSession(parseInt(sessionId))
+        setSession(data)
+      } catch (err: any) {
+        setError(err.response?.data?.detail || 'Failed to load')
+      } finally {
+        setIsLoading(false)
       }
-      setIsLoading(false)
     }
-    init()
-  }, [sessionId, loadSession, loadAnnotation])
+    loadSession()
+  }, [sessionId])
 
   useEffect(() => {
-    if (!currentAnnotation) {
-      setImageUrl(null)
-      setImageError(null)
-      setIntensityUrl(null)
-      setIntensityError(null)
-      setZoom(1)
-      setZoomOrigin({ x: 50, y: 50 })
-      setPan({ x: 0, y: 0 })
-      return
+    if (session && session.processing_versions.length > 0 && selectedPvId === null) {
+      setSelectedPvId(session.processing_versions[0].id)
     }
-
-    const controller = new AbortController()
-    let objectUrl: string | null = null
-    let intensityObjectUrl: string | null = null
-    const token = localStorage.getItem('token')
-    const headers = token ? { Authorization: `Bearer ${token}` } : undefined
-
-    const fetchImage = async (url: string) => {
-      const res = await fetch(url, { headers, signal: controller.signal })
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`)
-      }
-      return res.blob()
-    }
-
-    setIsImageLoading(true)
-    setImageError(null)
-    setIsIntensityLoading(true)
-    setIntensityError(null)
-
-    Promise.allSettled([
-      fetchImage(`/api/images/${currentAnnotation.id}`),
-      fetchImage(`/api/images/${currentAnnotation.id}/intensity`),
-    ])
-      .then(([mainResult, intensityResult]) => {
-        if (mainResult.status === 'fulfilled') {
-          objectUrl = URL.createObjectURL(mainResult.value)
-          setImageUrl(objectUrl)
-        } else {
-          console.error('Failed to load image:', mainResult.reason)
-          setImageError('原图加载失败')
-          setImageUrl(null)
-        }
-
-        if (intensityResult.status === 'fulfilled') {
-          intensityObjectUrl = URL.createObjectURL(intensityResult.value)
-          setIntensityUrl(intensityObjectUrl)
-        } else {
-          console.error('Failed to load intensity image:', intensityResult.reason)
-          setIntensityError('强度图加载失败')
-          setIntensityUrl(null)
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setIsImageLoading(false)
-          setIsIntensityLoading(false)
-        }
-      })
-
-    return () => {
-      controller.abort()
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl)
-      }
-      if (intensityObjectUrl) {
-        URL.revokeObjectURL(intensityObjectUrl)
-      }
-    }
-  }, [currentAnnotation?.id])
+  }, [session, selectedPvId])
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        setIsSpaceDown(true)
+    setSlicesData(null)
+    setSlicePage(1)
+    setSelectedSliceId(null)
+    setDetail(null)
+  }, [selectedPvId])
+
+  useEffect(() => {
+    const loadSlices = async () => {
+      if (!selectedPvId) return
+      setSlicesLoading(true)
+      try {
+        const res = await getSlicesForReview(selectedPvId, {
+          page: slicePage,
+          page_size: pageSize,
+          filter_status: filterStatus || undefined,
+        })
+        setSlicesData(res)
+      } catch (err) {
+        console.error('Failed to load slices:', err)
+      } finally {
+        setSlicesLoading(false)
       }
     }
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        setIsSpaceDown(false)
-        setIsPanning(false)
-        panStart.current = null
+    loadSlices()
+  }, [selectedPvId, slicePage, filterStatus])
+
+  useEffect(() => {
+    const loadDetail = async () => {
+      if (!selectedSliceId) return
+      setDetailLoading(true)
+      try {
+        const data = await getSliceDetail(selectedSliceId)
+        setDetail(data)
+        setActiveTab('preprocessing')
+        setActiveGtIndex(0)
+        const prepArtifacts = data.preprocessing.artifacts.filter(isDisplayable)
+        setSelectedArtifact(pickPreferredPrepArtifact(prepArtifacts))
+      } catch (err) {
+        console.error('Failed to load slice detail:', err)
+      } finally {
+        setDetailLoading(false)
       }
     }
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
+    loadDetail()
+  }, [selectedSliceId])
+
+  useEffect(() => {
+    if (!detail) return
+
+    const artifacts =
+      activeTab === 'preprocessing'
+        ? detail.preprocessing.artifacts.filter(isDisplayable)
+        : detail.gt_data[activeGtIndex]?.artifacts.filter(isDisplayable) || []
+
+    if (!selectedArtifact || !artifacts.some((a) => a.id === selectedArtifact.id)) {
+      if (activeTab === 'preprocessing') {
+        setSelectedArtifact(pickPreferredPrepArtifact(artifacts))
+      } else {
+        setSelectedArtifact(artifacts[0] || null)
+      }
     }
-  }, [])
+  }, [detail, activeTab, activeGtIndex, selectedArtifact])
 
-  const handleZoomWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const rect = e.currentTarget.getBoundingClientRect()
-    const x = ((e.clientX - rect.left) / rect.width) * 100
-    const y = ((e.clientY - rect.top) / rect.height) * 100
-    setZoomOrigin({
-      x: Math.max(0, Math.min(100, x)),
-      y: Math.max(0, Math.min(100, y)),
-    })
+  const currentReview = useMemo(() => {
+    if (!detail) return null
+    if (activeTab === 'preprocessing') return detail.preprocessing.review
+    return detail.gt_data[activeGtIndex]?.review || null
+  }, [detail, activeTab, activeGtIndex])
 
-    const delta = e.deltaY < 0 ? 1.1 : 0.9
-    setZoom((prev) => {
-      const next = prev * delta
-      return Math.max(0.4, Math.min(8, next))
-    })
-  }
+  const currentArtifacts = useMemo(() => {
+    if (!detail) return []
+    if (activeTab === 'preprocessing') return detail.preprocessing.artifacts
+    return detail.gt_data[activeGtIndex]?.artifacts || []
+  }, [detail, activeTab, activeGtIndex])
 
-  const handlePanStart = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isSpaceDown) return
-    e.preventDefault()
-    setIsPanning(true)
-    panStart.current = {
-      x: e.clientX,
-      y: e.clientY,
-      panX: pan.x,
-      panY: pan.y,
-    }
-  }
+  const displayableArtifacts = currentArtifacts.filter(isDisplayable)
 
-  const handlePanMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isPanning || !panStart.current) return
-    const dx = e.clientX - panStart.current.x
-    const dy = e.clientY - panStart.current.y
-    setPan({
-      x: panStart.current.panX + dx,
-      y: panStart.current.panY + dy,
-    })
-  }
+  const handleReviewUpdate = async (payload: {
+    score?: number
+    is_undecidable?: boolean
+    difficulty?: DifficultyLevel
+  }) => {
+    if (!detail || isUpdating) return
+    const gtData = activeTab === 'gt' ? detail.gt_data[activeGtIndex] : null
+    if (activeTab === 'gt' && !gtData) return
 
-  const handlePanEnd = () => {
-    setIsPanning(false)
-    panStart.current = null
-  }
-
-  const handleResetView = () => {
-    setZoom(1)
-    setZoomOrigin({ x: 50, y: 50 })
-    setPan({ x: 0, y: 0 })
-  }
-
-  const handleScore = async (score: number) => {
-    if (!currentAnnotation || isUpdating) return
     setIsUpdating(true)
     try {
-      await updateAnnotation(currentAnnotation.id, {
-        score,
-        is_undecidable: false,
+      await updateReview({
+        slice_id: detail.slice.id,
+        gt_version_id: gtData?.gt_version.id ?? null,
+        result: 'unknown',
+        ...payload,
       })
-
-      await loadSession()
-      const updated = await getAnnotation(currentAnnotation.id)
-      setCurrentAnnotation(updated)
-
-      const readyToAdvance =
-        (updated.score !== null || updated.is_undecidable) &&
-        updated.difficulty !== 'default'
-
-      if (readyToAdvance) {
-        if (updated.next_unannotated_id) {
-          await loadAnnotation(updated.next_unannotated_id)
-        } else if (updated.next_id) {
-          await loadAnnotation(updated.next_id)
-        }
+      const refreshed = await getSliceDetail(detail.slice.id)
+      setDetail(refreshed)
+      if (selectedPvId) {
+        const res = await getSlicesForReview(selectedPvId, {
+          page: slicePage,
+          page_size: pageSize,
+          filter_status: filterStatus || undefined,
+        })
+        setSlicesData(res)
       }
     } catch (err) {
-      console.error('Failed to update score:', err)
+      console.error('Failed to update review:', err)
     } finally {
       setIsUpdating(false)
     }
   }
 
-  const handleUndecidable = async () => {
-    if (!currentAnnotation || isUpdating) return
-    setIsUpdating(true)
+  const handleNavigate = (direction: 'prev' | 'next') => {
+    if (!detail) return
+    const targetId = direction === 'prev' ? detail.navigation.prev_id : detail.navigation.next_id
+    if (targetId) {
+      setSelectedSliceId(targetId)
+    }
+  }
+
+  const handleRescan = async () => {
+    if (!session || isScanning) return
+    setIsScanning(true)
+    setScanStatus(null)
     try {
-      await updateAnnotation(currentAnnotation.id, {
-        score: null,
-        is_undecidable: true,
-      })
-
-      await loadSession()
-      const updated = await getAnnotation(currentAnnotation.id)
-      setCurrentAnnotation(updated)
-
-      const readyToAdvance =
-        (updated.score !== null || updated.is_undecidable) &&
-        updated.difficulty !== 'default'
-
-      if (readyToAdvance) {
-        if (updated.next_unannotated_id) {
-          await loadAnnotation(updated.next_unannotated_id)
-        } else if (updated.next_id) {
-          await loadAnnotation(updated.next_id)
-        }
+      const res = await scanSession(session.raw_root_path, { sync_delete: true })
+      if (res.error) {
+        setScanStatus(`Scan failed: ${res.error}`)
+      } else {
+        setScanStatus(
+          `Scan complete: +Slices ${res.slices_found ?? 0}, +Artifacts ${res.artifacts_found ?? 0} | ` +
+          `-Slices ${res.slices_removed ?? 0}, -Artifacts ${res.artifacts_removed ?? 0}`
+        )
+        const refreshed = await getSession(session.id)
+        setSession(refreshed)
       }
-    } catch (err) {
-      console.error('Failed to mark undecidable:', err)
+    } catch (err: any) {
+      setScanStatus(err.response?.data?.detail || 'Scan failed')
     } finally {
-      setIsUpdating(false)
+      setIsScanning(false)
     }
-  }
-
-  const handleDifficulty = async (level: Annotation['difficulty']) => {
-    if (!currentAnnotation || isUpdating) return
-    setIsUpdating(true)
-    try {
-      await updateAnnotation(currentAnnotation.id, { difficulty: level })
-      const updated = await getAnnotation(currentAnnotation.id)
-      setCurrentAnnotation(updated)
-
-      const readyToAdvance =
-        (updated.score !== null || updated.is_undecidable) &&
-        updated.difficulty !== 'default'
-
-      if (readyToAdvance) {
-        if (updated.next_unannotated_id) {
-          await loadAnnotation(updated.next_unannotated_id)
-        } else if (updated.next_id) {
-          await loadAnnotation(updated.next_id)
-        }
-      }
-    } catch (err) {
-      console.error('Failed to update difficulty:', err)
-    } finally {
-      setIsUpdating(false)
-    }
-  }
-
-  const handlePrev = async () => {
-    if (!currentAnnotation?.prev_id || isUpdating) return
-    await loadAnnotation(currentAnnotation.prev_id)
-  }
-
-  const handleNext = async () => {
-    if (!currentAnnotation?.next_id || isUpdating) return
-    await loadAnnotation(currentAnnotation.next_id)
   }
 
   useKeyboard({
-    onScore: handleScore,
-    onUndecidable: handleUndecidable,
-    onDifficulty: handleDifficulty,
-    onPrev: handlePrev,
-    onNext: handleNext,
+    onScore: (score) => handleReviewUpdate({ score }),
+    onUndecidable: () => handleReviewUpdate({ is_undecidable: true }),
+    onDifficulty: (level) => handleReviewUpdate({ difficulty: level }),
+    onPrev: () => handleNavigate('prev'),
+    onNext: () => handleNavigate('next'),
   })
+
+  const stats = useMemo(() => {
+    if (!slicesData) return { total: 0, reviewed: 0, undecidable: 0, unknown: 0 }
+    const items = slicesData.items
+    const reviewed = items.filter((i) => !isUnreviewed(i.preprocessing_review)).length
+    const undecidable = items.filter((i) => i.preprocessing_review.is_undecidable).length
+    return {
+      total: items.length,
+      reviewed,
+      undecidable,
+      unknown: items.length - reviewed,
+    }
+  }, [slicesData])
 
   if (isLoading) {
     return (
-      <div className="page page-wide">
+      <div className="page">
         <Loading />
       </div>
     )
   }
 
-  if (!session || images.length === 0) {
+  if (error || !session) {
     return (
-      <div className="page page-wide">
-        <p>没有找到图片数据</p>
-        <Link to="/" className="app-link">
-          返回列表
-        </Link>
+      <div className="page">
+        <div className="card" style={{ textAlign: 'center', padding: 48 }}>
+          <div style={{ color: 'var(--danger)', marginBottom: 16 }}>{error || 'Session not found'}</div>
+          <Link to="/" className="btn btn-primary">Back to Sessions</Link>
+        </div>
       </div>
     )
   }
 
-  const progress = session.total_images > 0
-    ? (session.annotated_images / session.total_images) * 100
-    : 0
-
-  const getStatusBadge = () => {
-    if (currentAnnotation?.is_undecidable) {
-      return { text: '无法判断', bg: '#fffbe6', color: '#faad14' }
-    }
-    if (currentAnnotation?.score) {
-      return { text: '已标注', bg: 'rgba(34, 197, 94, 0.2)', color: '#15803d' }
-    }
-    return { text: '未标注', bg: '#f5f5f5', color: '#999' }
-  }
-
-  const status = getStatusBadge()
-
   return (
-    <div className="page page-wide">
+    <div className="page">
       <div className="detail-header">
         <Link to="/" className="app-link detail-back">
-          ← 返回列表
+          ← Back to Sessions
         </Link>
-        <h1 className="page-title">
-          {session.license_plate} - {session.session_id}
-        </h1>
-        <p className="page-subtitle">
-          {session.year}-{String(session.month).padStart(2, '0')}-
-          {String(session.day).padStart(2, '0')} | {session.software_version}
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+          <div>
+            <h1 className="page-title">{session.license_plate}</h1>
+            <p className="page-subtitle">
+              {session.date} | {session.session_uuid}
+            </p>
+          </div>
+          <button className="btn btn-outline" onClick={handleRescan} disabled={isScanning}>
+            {isScanning ? 'Scanning...' : 'Rescan'}
+          </button>
+        </div>
+        {scanStatus && (
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>{scanStatus}</div>
+        )}
       </div>
 
-      <div className="detail-stage">
-        <div className="detail-layout">
-        <div className="image-container">
-          <div className="image-wrapper" onWheel={handleZoomWheel}>
-            <div className="image-split">
-              <div
-                className="image-panel"
-                onWheel={handleZoomWheel}
-                onMouseDown={handlePanStart}
-                onMouseMove={handlePanMove}
-                onMouseUp={handlePanEnd}
-                onMouseLeave={handlePanEnd}
-                onDoubleClick={handleResetView}
-              >
-                {currentAnnotation && isIntensityLoading && (
-                  <span className="page-subtitle">强度图加载中...</span>
-                )}
-                {currentAnnotation && intensityError && (
-                  <span className="form-error">{intensityError}</span>
-                )}
-                {currentAnnotation && intensityUrl && !isIntensityLoading && !intensityError && (
-                  <img
-                    src={intensityUrl}
-                    alt={`${currentAnnotation.file_name} intensity`}
-                    className="image-frame"
-                    style={{
-                      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                      transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
-                    }}
-                  />
-                )}
-              </div>
-              <div
-                className="image-panel"
-                onWheel={handleZoomWheel}
-                onMouseDown={handlePanStart}
-                onMouseMove={handlePanMove}
-                onMouseUp={handlePanEnd}
-                onMouseLeave={handlePanEnd}
-                onDoubleClick={handleResetView}
-              >
-                {currentAnnotation && isImageLoading && (
-                  <span className="page-subtitle">原图加载中...</span>
-                )}
-                {currentAnnotation && imageError && (
-                  <span className="form-error">{imageError}</span>
-                )}
-                {currentAnnotation && imageUrl && !isImageLoading && !imageError && (
-                  <img
-                    src={imageUrl}
-                    alt={currentAnnotation.file_name}
-                    className="image-frame"
-                    style={{
-                      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                      transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
-                    }}
-                  />
-                )}
-              </div>
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div className="card-title">Session Info</div>
+        <div className="info-row">
+          <span className="info-label">License Plate</span>
+          <span className="info-value">{session.license_plate}</span>
+        </div>
+        <div className="info-row">
+          <span className="info-label">Date</span>
+          <span className="info-value">{session.date}</span>
+        </div>
+        <div className="info-row">
+          <span className="info-label">Session UUID</span>
+          <span className="info-value" style={{ fontFamily: 'monospace', fontSize: 12 }}>
+            {session.session_uuid}
+          </span>
+        </div>
+        <div className="info-row" style={{ border: 'none' }}>
+          <span className="info-label">Raw Data Path</span>
+          <span className="info-value" style={{ fontFamily: 'monospace', fontSize: 11 }}>
+            {session.raw_root_path}
+          </span>
+        </div>
+      </div>
+
+      <div className="card-title" style={{ marginBottom: 16 }}>
+        Processing Versions ({session.processing_versions.length})
+      </div>
+
+      {session.processing_versions.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: 32, color: 'var(--muted)' }}>
+          No processing versions
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 16 }}>
+          {session.processing_versions.map((pv) => (
+            <ProcessingVersionCard
+              key={pv.id}
+              pv={pv}
+              isActive={pv.id === selectedPvId}
+              onSelect={() => setSelectedPvId(pv.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {selectedPvId && (
+        <div style={{ marginTop: 32 }}>
+          <div className="page-header" style={{ marginBottom: 12 }}>
+            <div>
+              <h2 style={{ margin: 0, fontSize: 20 }}>Slices</h2>
+              <p className="page-subtitle">
+                {slicesData?.processing_version.dir_name || 'Loading...'}
+              </p>
             </div>
-          </div>
-          <div className="image-nav">
             <button
-              className={`btn btn-outline ${
-                currentAnnotation?.prev_id ? '' : 'btn-disabled'
-              }`}
-              onClick={handlePrev}
-              disabled={!currentAnnotation?.prev_id || isUpdating}
+              className="btn btn-primary"
+              onClick={() => {
+                const items = slicesData?.items || []
+                const unreviewed = items.find((i) => isUnreviewed(i.preprocessing_review))
+                if (unreviewed) {
+                  navigate(`/session/${session.id}/review/${unreviewed.id}`)
+                } else if (items.length > 0) {
+                  navigate(`/session/${session.id}/review/${items[0].id}`)
+                }
+              }}
+              disabled={!slicesData || slicesData.items.length === 0}
             >
-              ← 上一张
-            </button>
-            <span>
-              {currentAnnotation?.position} / {currentAnnotation?.total}
-            </span>
-            <button
-              className={`btn btn-outline ${
-                currentAnnotation?.next_id ? '' : 'btn-disabled'
-              }`}
-              onClick={handleNext}
-              disabled={!currentAnnotation?.next_id || isUpdating}
-            >
-              下一张 →
+              Start Review
             </button>
           </div>
-        </div>
 
-        <div className="score-sidebar">
-          <div className="card score-card">
-            <div className="card-title">评分</div>
-            <div className="score-grid">
-              {[1, 2, 3, 4, 5].map((score) => (
-                <button
-                  key={score}
-                  className={`score-btn ${
-                    currentAnnotation?.score === score ? 'active' : ''
-                  }`}
-                  data-score={score}
-                  onClick={() => handleScore(score)}
-                  disabled={isUpdating}
-                >
-                  <div className="score-number">{score}</div>
-                  <div className="score-label">{SCORE_LABELS[score]}</div>
-                </button>
-              ))}
-              <button
-                className={`score-btn score-undecidable ${
-                  currentAnnotation?.is_undecidable ? 'active' : ''
-                }`}
-                onClick={handleUndecidable}
-                disabled={isUpdating}
+          <div className="stat-grid" style={{ marginBottom: 24 }}>
+            <div className="stat-card">
+              <div className="stat-value">{stats.total}</div>
+              <div className="stat-label">Total Slices</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-value" style={{ color: '#15803d' }}>{stats.reviewed}</div>
+              <div className="stat-label">Reviewed</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-value" style={{ color: '#64748b' }}>{stats.unknown}</div>
+              <div className="stat-label">Not Reviewed</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-value" style={{ color: '#475569' }}>{stats.undecidable}</div>
+              <div className="stat-label">Undecidable</div>
+            </div>
+          </div>
+
+          {slicesData?.gt_versions.length ? (
+            <div className="card" style={{ marginBottom: 24 }}>
+              <div className="card-title">GT Versions</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {slicesData.gt_versions.map((gt) => (
+                  <span
+                    key={gt.id}
+                    className="status-badge"
+                    style={{
+                      background: gt.gt_type === 'OD'
+                        ? 'rgba(34, 197, 94, 0.1)'
+                        : 'rgba(168, 85, 247, 0.1)',
+                      color: gt.gt_type === 'OD' ? '#15803d' : '#7c3aed',
+                    }}
+                  >
+                    {gt.gt_type} {gt.version_tag}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="filters" style={{ marginBottom: 16 }}>
+            <div className="filter-group">
+              <span className="filter-label">Review Status</span>
+              <select
+                className="select"
+                value={filterStatus}
+                onChange={(e) => {
+                  setFilterStatus(e.target.value)
+                  setSlicePage(1)
+                }}
               >
-                <div className="score-number">N</div>
-                <div className="score-label">无法判断</div>
-              </button>
+                <option value="">All</option>
+                <option value="unknown">Not Reviewed</option>
+                <option value="scored">Scored</option>
+                <option value="undecidable">Undecidable</option>
+              </select>
             </div>
           </div>
-          <div className="card difficulty-card">
-            <div className="card-title">难度</div>
-            <div className="difficulty-grid">
-              {([
-                { key: 'default', label: '默认' },
-                { key: 'easy', label: '简单' },
-                { key: 'median', label: '中等' },
-                { key: 'hard', label: '困难' },
-                { key: 'Error', label: '错误' },
-              ] as const).map((item) => (
-                <button
-                  key={item.key}
-                  className={`difficulty-btn ${
-                    currentAnnotation?.difficulty === item.key ? 'active' : ''
-                  }`}
-                  data-difficulty={item.key}
-                  onClick={() => handleDifficulty(item.key)}
-                  disabled={isUpdating}
-                >
-                  {item.label}
-                </button>
-              ))}
+
+          {slicesLoading && !slicesData ? (
+            <Loading />
+          ) : !slicesData || slicesData.items.length === 0 ? (
+            <div className="card" style={{ textAlign: 'center', padding: 48, color: 'var(--muted)' }}>
+              No data
             </div>
+          ) : (
+            <>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Slice Name</th>
+                    <th>Preprocessing Score</th>
+                    <th>Difficulty</th>
+                    {slicesData.gt_versions.map((gt) => (
+                      <th key={gt.id}>{gt.gt_type} {gt.version_tag}</th>
+                    ))}
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {slicesData.items.map((item) => (
+                    <tr
+                      key={item.id}
+                      style={{
+                        background: item.id === selectedSliceId ? 'rgba(10, 132, 255, 0.06)' : undefined,
+                      }}
+                    >
+                      <td>
+                        <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                          {item.slice_name.length > 60
+                            ? '...' + item.slice_name.slice(-60)
+                            : item.slice_name}
+                        </span>
+                      </td>
+                      <td>
+                        {item.preprocessing_review.is_undecidable ? (
+                          <span className="score-tag">N</span>
+                        ) : item.preprocessing_review.score ? (
+                          <span className="score-tag" data-score={item.preprocessing_review.score}>
+                            {item.preprocessing_review.score}
+                          </span>
+                        ) : (
+                          <span className="score-tag">Not Reviewed</span>
+                        )}
+                      </td>
+                      <td>
+                        {(() => {
+                          const difficulty = item.preprocessing_review.difficulty || 'default'
+                          return (
+                            <span className="difficulty-tag" data-difficulty={difficulty}>
+                              {difficultyLabels[difficulty] || 'Default'}
+                            </span>
+                          )
+                        })()}
+                      </td>
+                      {slicesData.gt_versions.map((gt) => {
+                        const gtReview = item.gt_reviews.find((r) => r.gt_version_id === gt.id)
+                        if (!gtReview) {
+                          return (
+                            <td key={gt.id}>
+                              <span style={{ color: 'var(--muted)' }}>-</span>
+                            </td>
+                          )
+                        }
+                        return (
+                          <td key={gt.id}>
+                            {gtReview.is_undecidable ? (
+                              <span className="score-tag">N</span>
+                            ) : gtReview.score ? (
+                              <span className="score-tag" data-score={gtReview.score}>
+                                {gtReview.score}
+                              </span>
+                            ) : (
+                              <span className="score-tag">Not Reviewed</span>
+                            )}
+                          </td>
+                        )
+                      })}
+                      <td>
+                        <button
+                          className="btn btn-outline"
+                          style={{ padding: '4px 10px', fontSize: 12 }}
+                          onClick={() => navigate(`/session/${session.id}/review/${item.id}`)}
+                        >
+                          Review
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="pagination" style={{ marginBottom: 32 }}>
+                <button
+                  className={`btn btn-outline ${slicePage === 1 ? 'btn-disabled' : ''}`}
+                  onClick={() => setSlicePage((p) => Math.max(1, p - 1))}
+                  disabled={slicePage === 1}
+                >
+                  Previous
+                </button>
+                <span>
+                  Page {slicePage} of {Math.ceil(slicesData.total / pageSize)}
+                </span>
+                <button
+                  className={`btn btn-outline ${slicePage >= Math.ceil(slicesData.total / pageSize) ? 'btn-disabled' : ''}`}
+                  onClick={() => setSlicePage((p) => p + 1)}
+                  disabled={slicePage >= Math.ceil(slicesData.total / pageSize)}
+                >
+                  Next
+                </button>
+              </div>
+            </>
+          )}
+
+          {detailLoading ? (
+            <Loading />
+          ) : detail ? (
+            <div className="detail-stage" style={{ marginTop: 24 }}>
+              <div className="detail-layout">
+                <div className="image-container">
+                  <div className="image-wrapper">
+                    {selectedArtifact ? (
+                      <div className="image-panel" style={{ width: '100%' }}>
+                        {selectedArtifact.file_type === 'image' ? (
+                          <img
+                            src={getArtifactUrl(selectedArtifact.id)}
+                            alt={selectedArtifact.file_name}
+                            className="image-frame"
+                          />
+                        ) : (
+                          <video
+                            src={getArtifactUrl(selectedArtifact.id)}
+                            controls
+                            style={{ maxWidth: '100%', maxHeight: '100%' }}
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ color: 'var(--muted)', padding: 48 }}>
+                        No previewable file
+                      </div>
+                    )}
+                  </div>
+                  <div className="image-nav">
+                    <button
+                      className={`btn btn-outline ${!detail.navigation.prev_id ? 'btn-disabled' : ''}`}
+                      onClick={() => handleNavigate('prev')}
+                      disabled={!detail.navigation.prev_id}
+                    >
+                      ← Previous
+                    </button>
+                    <span>
+                      {detail.navigation.position} / {detail.navigation.total}
+                    </span>
+                    <button
+                      className={`btn btn-outline ${!detail.navigation.next_id ? 'btn-disabled' : ''}`}
+                      onClick={() => handleNavigate('next')}
+                      disabled={!detail.navigation.next_id}
+                    >
+                      Next →
+                    </button>
+                  </div>
+                </div>
+
+                <div className="score-sidebar">
+                  <div className="card score-card">
+                    <div className="card-title">Review Type</div>
+
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                      <button
+                        className={`btn ${activeTab === 'preprocessing' ? 'btn-primary' : 'btn-outline'}`}
+                        onClick={() => {
+                          setActiveTab('preprocessing')
+                          const prepArtifacts = detail.preprocessing.artifacts.filter(isDisplayable)
+                          setSelectedArtifact(pickPreferredPrepArtifact(prepArtifacts))
+                        }}
+                        style={{ flex: 1, padding: '8px 12px' }}
+                      >
+                        Preprocessing
+                      </button>
+                      {detail.gt_data.length > 0 && (
+                        <button
+                          className={`btn ${activeTab === 'gt' ? 'btn-primary' : 'btn-outline'}`}
+                          onClick={() => {
+                            setActiveTab('gt')
+                            const gtArtifacts = detail.gt_data[activeGtIndex]?.artifacts.filter(isDisplayable) || []
+                            setSelectedArtifact(gtArtifacts[0] || null)
+                          }}
+                          style={{ flex: 1, padding: '8px 12px' }}
+                        >
+                          GT ({detail.gt_data.length})
+                        </button>
+                      )}
+                    </div>
+
+                    {activeTab === 'gt' && detail.gt_data.length > 1 && (
+                      <div style={{ marginBottom: 16 }}>
+                        <select
+                          className="select"
+                          value={activeGtIndex}
+                          onChange={(e) => {
+                            const idx = parseInt(e.target.value)
+                            setActiveGtIndex(idx)
+                            const gtArtifacts = detail.gt_data[idx]?.artifacts.filter(isDisplayable) || []
+                            setSelectedArtifact(gtArtifacts[0] || null)
+                          }}
+                          style={{ width: '100%' }}
+                        >
+                          {detail.gt_data.map((gt, idx) => (
+                            <option key={gt.gt_version.id} value={idx}>
+                              {gt.gt_version.gt_type} {gt.gt_version.version_tag}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <div style={{ marginBottom: 16, padding: 12, background: 'var(--bg)', borderRadius: 'var(--radius-sm)' }}>
+                      <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 6 }}>Current Status</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {currentReview?.is_undecidable ? (
+                          <span className="score-tag">N</span>
+                        ) : currentReview?.score ? (
+                          <span className="score-tag" data-score={currentReview.score}>
+                            {currentReview.score}
+                          </span>
+                        ) : (
+                          <span className="score-tag">Not Reviewed</span>
+                        )}
+                        <span
+                          className="difficulty-tag"
+                          data-difficulty={currentReview?.difficulty || 'default'}
+                        >
+                          {difficultyLabels[currentReview?.difficulty || 'default']}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="card-title">Score</div>
+                    <div className="score-grid">
+                      {[1, 2, 3, 4, 5].map((score) => (
+                        <button
+                          key={score}
+                          className={`score-btn ${currentReview?.score === score && !currentReview?.is_undecidable ? 'active' : ''}`}
+                          data-score={score}
+                          onClick={() => handleReviewUpdate({ score })}
+                          disabled={isUpdating}
+                        >
+                          <div className="score-number">{score}</div>
+                          <div className="score-label">Score ({score})</div>
+                        </button>
+                      ))}
+                      <button
+                        className={`score-btn score-undecidable ${currentReview?.is_undecidable ? 'active' : ''}`}
+                        onClick={() => handleReviewUpdate({ is_undecidable: true })}
+                        disabled={isUpdating}
+                      >
+                        <div className="score-number">N</div>
+                        <div className="score-label">Undecidable (N)</div>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="card difficulty-card">
+                    <div className="card-title">Difficulty</div>
+                    <div className="difficulty-grid">
+                      {(Object.keys(difficultyLabels) as DifficultyLevel[]).map((level) => (
+                        <button
+                          key={level}
+                          className={`difficulty-btn ${currentReview?.difficulty === level ? 'active' : ''}`}
+                          data-difficulty={level}
+                          onClick={() => handleReviewUpdate({ difficulty: level })}
+                          disabled={isUpdating}
+                        >
+                          {difficultyLabels[level]} {level === 'default' ? '' : `(${{ easy: 'F1', median: 'F2', hard: 'F3', Error: 'F4' }[level]})`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="detail-sidebar">
+                  <div className="card">
+                    <div className="card-title">Slice Info</div>
+                    <div className="info-row">
+                      <span className="info-label">License Plate</span>
+                      <span className="info-value">{detail.session.license_plate}</span>
+                    </div>
+                    <div className="info-row">
+                      <span className="info-label">Date</span>
+                      <span className="info-value">{detail.session.date}</span>
+                    </div>
+                    <div className="info-row">
+                      <span className="info-label">Software Version</span>
+                      <span className="info-value">{detail.processing_version.software_version}</span>
+                    </div>
+                    <div className="info-row" style={{ border: 'none' }}>
+                      <span className="info-label">Slice</span>
+                      <span className="info-value" style={{ fontSize: 11 }}>
+                        {detail.slice.slice_name}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="card-title">Files</div>
+                    <div className="difficulty-grid" style={{ maxHeight: 200, overflow: 'auto' }}>
+                      {displayableArtifacts.map((artifact) => (
+                        <button
+                          key={artifact.id}
+                          className={`difficulty-btn ${selectedArtifact?.id === artifact.id ? 'active' : ''}`}
+                          onClick={() => setSelectedArtifact(artifact)}
+                          style={{ textAlign: 'left', padding: '8px 12px' }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 500 }}>{artifact.file_name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+                            {artifact.category}
+                          </div>
+                        </button>
+                      ))}
+                      {displayableArtifacts.length === 0 && (
+                        <div style={{ color: 'var(--muted)', fontSize: 13, padding: 8 }}>
+                          No previewable files
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="card-title">Shortcuts</div>
+                    <div className="shortcut-grid">
+                      <div className="shortcut-row">
+                        <span className="kbd">1-5</span>Score
+                      </div>
+                      <div className="shortcut-row">
+                        <span className="kbd">N</span>Undecidable
+                      </div>
+                      <div className="shortcut-row">
+                        <span className="kbd">F1</span>Easy
+                      </div>
+                      <div className="shortcut-row">
+                        <span className="kbd">F2</span>Medium
+                      </div>
+                      <div className="shortcut-row">
+                        <span className="kbd">F3</span>Hard
+                      </div>
+                      <div className="shortcut-row">
+                        <span className="kbd">F4</span>Error
+                      </div>
+                      <div className="shortcut-row">
+                        <span className="kbd">←</span>Previous
+                      </div>
+                      <div className="shortcut-row">
+                        <span className="kbd">→</span>Next
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ProcessingVersionCard({
+  pv,
+  isActive,
+  onSelect,
+}: {
+  pv: ProcessingVersionInfo
+  isActive: boolean
+  onSelect: () => void
+}) {
+  return (
+    <div
+      className="card"
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect()
+        }
+      }}
+      style={{
+        border: isActive ? '1px solid rgba(10, 132, 255, 0.4)' : undefined,
+        cursor: 'pointer',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 16 }}>{pv.software_version}</div>
+          <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 4 }}>
+            Processing Date: {pv.processing_date}
+            {pv.processing_time ? ` ${pv.processing_time.split('T')[1]?.split('.')[0] || ''}` : ''}
           </div>
         </div>
+        <span className="status-badge" style={{ background: 'rgba(10, 132, 255, 0.1)', color: 'var(--accent)' }}>
+          {pv.slice_count} Slices
+        </span>
+      </div>
 
-        <div className="detail-sidebar">
-          <div className="info-progress">
-            <div className="card">
-              <div className="card-title">图片信息</div>
-              <div className="info-row">
-                <span className="info-label">车牌号</span>
-                <span className="info-value">{session.license_plate}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">日期</span>
-                <span className="info-value">
-                  {session.year}-{String(session.month).padStart(2, '0')}-
-                  {String(session.day).padStart(2, '0')}
-                </span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Session ID</span>
-                <span className="info-value">{session.session_id}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">状态</span>
-                <span
-                  style={{
-                    background: status.bg,
-                    color: status.color,
-                  }}
-                  className="status-badge"
-                >
-                  {status.text}
-                </span>
-              </div>
-            <div className="info-row">
-              <span className="info-label">难易程度</span>
+      <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+        Directory: {pv.dir_name}
+      </div>
+
+      {pv.gt_versions.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--text)' }}>
+            GT Versions
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {pv.gt_versions.map((gt) => (
               <span
-                className="difficulty-tag"
-                data-difficulty={currentAnnotation?.difficulty || 'default'}
+                key={gt.id}
+                className="status-badge"
+                style={{
+                  background: gt.gt_type === 'OD'
+                    ? 'rgba(34, 197, 94, 0.1)'
+                    : 'rgba(168, 85, 247, 0.1)',
+                  color: gt.gt_type === 'OD' ? '#15803d' : '#7c3aed',
+                }}
               >
-                {currentAnnotation?.difficulty || 'default'}
+                {gt.gt_type} {gt.version_tag}
               </span>
-            </div>
-            {currentAnnotation?.score && (
-              <div className="info-row">
-                <span className="info-label">当前评分</span>
-                <span
-                  className="score-tag"
-                  data-score={currentAnnotation.score}
-                >
-                  {currentAnnotation.score} 分 ({SCORE_LABELS[currentAnnotation.score]})
-                </span>
-              </div>
-            )}
-              <div className="info-row">
-                <span className="info-label">文件名</span>
-                <span className="info-value">
-                  {currentAnnotation?.file_name}
-                </span>
-              </div>
-            </div>
-
-            <div className="card progress-card">
-              <div className="card-title">Session 进度</div>
-              <div style={{ fontSize: '14px' }}>
-                {session.annotated_images} / {session.total_images} ({progress.toFixed(1)}%)
-              </div>
-              <div className="progress-bar">
-                <div
-                  className="progress-fill"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-title">快捷键</div>
-            <div className="shortcut-grid">
-              <div className="shortcut-row">
-                <span className="kbd">1-5</span>评分
-              </div>
-              <div className="shortcut-row">
-                <span className="kbd">N</span>无法判断
-              </div>
-              <div className="shortcut-row">
-                <span className="kbd">F1</span>简单
-              </div>
-              <div className="shortcut-row">
-                <span className="kbd">F2</span>中等
-              </div>
-              <div className="shortcut-row">
-                <span className="kbd">F3</span>困难
-              </div>
-              <div className="shortcut-row">
-                <span className="kbd">F4</span>错误
-              </div>
-              <div className="shortcut-row">
-                <span className="kbd">←</span>上一张
-              </div>
-              <div className="shortcut-row">
-                <span className="kbd">→</span>下一张
-              </div>
-            </div>
+            ))}
           </div>
         </div>
-      </div>
-      </div>
+      )}
+
     </div>
   )
 }

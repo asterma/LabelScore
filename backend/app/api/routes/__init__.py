@@ -1,3 +1,3 @@
-from app.api.routes import auth, sessions, annotations, images, scan, export
+from app.api.routes import auth, scan, sessions
 
-__all__ = ["auth", "sessions", "annotations", "images", "scan", "export"]
+__all__ = ["auth", "scan", "sessions"]

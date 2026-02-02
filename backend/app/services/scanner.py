@@ -25,6 +25,7 @@ class ParsedProcessingVersion:
     """Parsed processing version directory name."""
     processing_date: date | None
     software_version: str
+    run_tag: str | None
     dir_name: str
 
 
@@ -51,7 +52,7 @@ PROCESSING_VERSION_PATTERN = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})_(?P<version>.+)$"
 )
 
-# Pattern: {software_version}_run-xxx, e.g., tmp_ld_annotatorv039_run-001
+# Pattern: {software_version}_run-xxx, e.g., tmp_ld_annotatorv0311_run-000
 PROCESSING_VERSION_RUN_PATTERN = re.compile(
     r"^(?P<version>.+)_run-(?P<run>\d+)$"
 )
@@ -87,6 +88,7 @@ def parse_processing_version(dir_name: str) -> ParsedProcessingVersion | None:
         return ParsedProcessingVersion(
             processing_date=date(year, month, day),
             software_version=match.group("version"),
+            run_tag=None,
             dir_name=dir_name,
         )
 
@@ -97,6 +99,7 @@ def parse_processing_version(dir_name: str) -> ParsedProcessingVersion | None:
     return ParsedProcessingVersion(
         processing_date=None,
         software_version=match.group("version"),
+        run_tag=f"run-{match.group('run')}",
         dir_name=dir_name,
     )
 
@@ -342,12 +345,15 @@ class ScannerService:
                 pv.processing_time = processing_time
             if pv.processing_date != processing_date:
                 pv.processing_date = processing_date
+            if pv.run_tag != parsed.run_tag:
+                pv.run_tag = parsed.run_tag
             return pv
 
         pv = ProcessingVersion(
             session_id=session.id,
             dir_name=parsed.dir_name,
             software_version=parsed.software_version,
+            run_tag=parsed.run_tag,
             processing_date=processing_date,
             processing_time=processing_time,
             root_path=str(pv_path),

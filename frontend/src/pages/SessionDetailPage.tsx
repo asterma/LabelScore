@@ -831,7 +831,10 @@ function ProcessingVersionCard({
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
-          <div style={{ fontWeight: 600, fontSize: 16 }}>{pv.software_version}</div>
+          <div style={{ fontWeight: 600, fontSize: 16 }}>
+            {pv.software_version}
+            {pv.run_tag ? ` (${pv.run_tag})` : ''}
+          </div>
           <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 4 }}>
             Processing Date: {pv.processing_date}
             {pv.processing_time ? ` ${pv.processing_time.split('T')[1]?.split('.')[0] || ''}` : ''}

@@ -14,7 +14,8 @@ class ProcessingVersion(Base):
     session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True)
 
     dir_name = Column(String(100), nullable=False)  # 完整目录名
-    software_version = Column(String(100), nullable=False)  # 软件版本，如 "tmp_ld_annotatorv039"
+    software_version = Column(String(100), nullable=False)  # 软件版本，如 "tmp_ld_annotatorv0311"
+    run_tag = Column(String(32), nullable=True)  # 运行标签，如 "run-000"
     processing_date = Column(Date, nullable=False)  # 处理日期，如 2026-01-20
     processing_time = Column(DateTime, nullable=True)  # 处理时间（精确到秒）
     root_path = Column(String(500), nullable=False)  # 处理版本根路径

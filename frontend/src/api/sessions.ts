@@ -40,6 +40,7 @@ export interface ProcessingVersionInfo {
   id: number
   dir_name: string
   software_version: string
+  run_tag?: string | null
   processing_date: string
   processing_time?: string | null
   slice_count: number

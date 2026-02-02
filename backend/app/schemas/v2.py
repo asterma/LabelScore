@@ -26,6 +26,7 @@ class ProcessingVersionBase(BaseModel):
     session_id: int
     dir_name: str
     software_version: str
+    run_tag: str | None = None
     processing_date: date
     processing_time: datetime | None = None
     root_path: str

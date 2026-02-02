@@ -102,6 +102,7 @@ async def get_session(
             "id": pv.id,
             "dir_name": pv.dir_name,
             "software_version": pv.software_version,
+            "run_tag": pv.run_tag,
             "processing_date": pv.processing_date.isoformat(),
             "processing_time": pv.processing_time.isoformat() if pv.processing_time else None,
             "slice_count": len(slices),

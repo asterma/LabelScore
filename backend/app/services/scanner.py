@@ -548,6 +548,22 @@ class ScannerService:
                     seen_artifacts=seen_artifacts,
                 )
 
+        # Scan image directory
+        image_dir = gt_path / "image"
+        if image_dir.exists():
+            for file_path in image_dir.iterdir():
+                if file_path.is_dir():
+                    continue
+                self._create_artifact_for_slice(
+                    db,
+                    None,
+                    slices,
+                    file_path,
+                    f"GT_{gt_type}/image",
+                    gt_version=gt_version,
+                    seen_artifacts=seen_artifacts,
+                )
+
     def _create_artifact_for_slice(
         self,
         db: DBSession,

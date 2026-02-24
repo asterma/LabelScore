@@ -49,7 +49,7 @@ const pickPreferredPrepArtifact = (artifacts: ArtifactInfo[]) => {
 const isUnreviewed = (review: {
   score: number | null
   is_undecidable: boolean
-} | null) => !review || (review.score === null && !review.is_undecidable)
+} | null) => !review || ((review.score === null || review.score === 0) && !review.is_undecidable)
 
 export default function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -473,7 +473,7 @@ export default function SessionDetailPage() {
                       <td>
                         {item.preprocessing_review.is_undecidable ? (
                           <span className="score-tag">N</span>
-                        ) : item.preprocessing_review.score ? (
+                        ) : item.preprocessing_review.score !== null && item.preprocessing_review.score !== undefined ? (
                           <span className="score-tag" data-score={item.preprocessing_review.score}>
                             {item.preprocessing_review.score}
                           </span>
@@ -504,7 +504,7 @@ export default function SessionDetailPage() {
                           <td key={gt.id}>
                             {gtReview.is_undecidable ? (
                               <span className="score-tag">N</span>
-                            ) : gtReview.score ? (
+                            ) : gtReview.score !== null && gtReview.score !== undefined ? (
                               <span className="score-tag" data-score={gtReview.score}>
                                 {gtReview.score}
                               </span>
@@ -831,9 +831,16 @@ function ProcessingVersionCard({
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
-          <div style={{ fontWeight: 600, fontSize: 16 }}>
-            {pv.software_version}
-            {pv.run_tag ? ` (${pv.run_tag})` : ''}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontWeight: 600, fontSize: 16 }}>{pv.software_version}</div>
+            {pv.run_tag && (
+              <span
+                className="status-badge"
+                style={{ background: 'rgba(59, 130, 246, 0.1)', color: '#1d4ed8' }}
+              >
+                {pv.run_tag}
+              </span>
+            )}
           </div>
           <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 4 }}>
             Processing Date: {pv.processing_date}

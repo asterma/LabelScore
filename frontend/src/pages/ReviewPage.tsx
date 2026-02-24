@@ -10,6 +10,15 @@ import {
 import { Loading } from '../components/common/Loading'
 
 type ReviewType = 'preprocessing' | 'gt'
+type DifficultyLevel = 'default' | 'easy' | 'median' | 'hard' | 'Error'
+
+const difficultyLabels: Record<DifficultyLevel, string> = {
+  default: 'Default',
+  easy: 'Easy',
+  median: 'Medium',
+  hard: 'Hard',
+  Error: 'Error',
+}
 
 export default function ReviewPage() {
   const { sliceId, sessionId } = useParams<{ sliceId: string; sessionId?: string }>()
@@ -21,7 +30,15 @@ export default function ReviewPage() {
   const [isUpdating, setIsUpdating] = useState(false)
   const [activeTab, setActiveTab] = useState<ReviewType>('preprocessing')
   const [activeGtIndex, setActiveGtIndex] = useState(0)
-  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactInfo | null>(null)
+  const [selectedIntensityArtifact, setSelectedIntensityArtifact] = useState<ArtifactInfo | null>(null)
+  const [selectedVideoArtifact, setSelectedVideoArtifact] = useState<ArtifactInfo | null>(null)
+  const [selectedVisualArtifact, setSelectedVisualArtifact] = useState<ArtifactInfo | null>(null)
+  const [selectedMapVisualArtifact, setSelectedMapVisualArtifact] = useState<ArtifactInfo | null>(null)
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isSpaceDown, setIsSpaceDown] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const [lastDragPos, setLastDragPos] = useState<{ x: number; y: number } | null>(null)
   const buildReviewPath = (id: number) =>
     sessionId ? `/session/${sessionId}/review/${id}` : `/review/${id}`
 
@@ -36,9 +53,15 @@ export default function ReviewPage() {
       const prepArtifacts = data.preprocessing.artifacts.filter(
         (a) => a.file_type === 'image' || a.file_type === 'video'
       )
-      if (prepArtifacts.length > 0) {
-        setSelectedArtifact(prepArtifacts[0])
-      }
+      const firstIntensity = prepArtifacts.find(
+        (a) => a.category.includes('map/IMG_INTENSITY') || a.category.includes('map/INTENSITY')
+      ) || prepArtifacts.find((a) => a.file_type === 'image')
+      const firstVideo = prepArtifacts.find((a) => a.file_type === 'video')
+      const firstVisual = prepArtifacts.find((a) => a.category.includes('map/visualize')) || null
+      if (firstIntensity) setSelectedIntensityArtifact(firstIntensity)
+      if (firstVideo) setSelectedVideoArtifact(firstVideo)
+      if (firstVisual) setSelectedVisualArtifact(firstVisual)
+      if (firstVisual) setSelectedMapVisualArtifact(firstVisual)
     } catch (err) {
       console.error('Failed to load slice detail:', err)
     } finally {
@@ -52,6 +75,62 @@ export default function ReviewPage() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setIsSpaceDown(true)
+      }
+    }
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setIsSpaceDown(false)
+        setIsDragging(false)
+        setLastDragPos(null)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
+
+  const handleZoomWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const delta = event.deltaY
+    setZoom((prev) => {
+      const next = prev + (delta > 0 ? -0.1 : 0.1)
+      return Math.min(5, Math.max(0.2, Number(next.toFixed(2))))
+    })
+  }
+
+  const handlePanStart = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!isSpaceDown) return
+    event.preventDefault()
+    setIsDragging(true)
+    setLastDragPos({ x: event.clientX, y: event.clientY })
+  }
+
+  const handlePanMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDragging || !lastDragPos) return
+    event.preventDefault()
+    const dx = event.clientX - lastDragPos.x
+    const dy = event.clientY - lastDragPos.y
+    setPan((prev) => ({ x: prev.x + dx, y: prev.y + dy }))
+    setLastDragPos({ x: event.clientX, y: event.clientY })
+  }
+
+  const handlePanEnd = () => {
+    setIsDragging(false)
+    setLastDragPos(null)
+  }
+
+  const handleResetView = () => {
+    setZoom(1)
+    setPan({ x: 0, y: 0 })
+  }
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
       if (!detail || isUpdating) return
 
       // Arrow keys for navigation
@@ -60,13 +139,13 @@ export default function ReviewPage() {
       } else if (e.key === 'ArrowRight' && detail.navigation.next_id) {
         navigate(buildReviewPath(detail.navigation.next_id))
       }
-      // Number keys for quick review
-      else if (e.key === '1') {
-        handleReview('pass')
-      } else if (e.key === '2') {
-        handleReview('fail')
-      } else if (e.key === '0') {
-        handleReview('unknown')
+      // Number keys for quick scoring
+      else if (e.key === '0') {
+        handleScore(0)
+      } else if (e.key >= '1' && e.key <= '5') {
+        handleScore(parseInt(e.key))
+      } else if (e.key === 'n' || e.key === 'N') {
+        handleUndecidable()
       }
       // Tab to switch between preprocessing and GT
       else if (e.key === 'Tab' && detail.gt_data.length > 0) {
@@ -79,7 +158,53 @@ export default function ReviewPage() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [detail, isUpdating, navigate])
 
-  const handleReview = async (result: string) => {
+  useEffect(() => {
+    if (!detail) return
+    const artifacts = getCurrentArtifacts().filter(
+      (a) => a.file_type === 'image' || a.file_type === 'video'
+    )
+    const intensityArtifacts = detail.preprocessing.artifacts.filter(
+      (a) => a.file_type === 'image'
+    )
+    const firstIntensity = intensityArtifacts.find(
+      (a) => a.category.includes('map/IMG_INTENSITY') || a.category.includes('map/INTENSITY')
+    ) || intensityArtifacts[0] || null
+    const mapVisualArtifacts = detail.preprocessing.artifacts.filter(
+      (a) => a.category.includes('map/visualize')
+    )
+    const firstMapVisual = mapVisualArtifacts[0] || null
+    const firstVideo = artifacts.find((a) => a.file_type === 'video') || null
+    const firstVisual = activeTab === 'gt'
+      ? artifacts.find((a) => a.file_name.endsWith('_rf_gt.jpg')) || null
+      : artifacts.find((a) => a.category.includes('map/visualize')) || null
+
+    if (
+      !selectedIntensityArtifact ||
+      !intensityArtifacts.some((a) => a.id === selectedIntensityArtifact.id)
+    ) {
+      setSelectedIntensityArtifact(firstIntensity)
+    }
+    if (
+      !selectedVideoArtifact ||
+      !artifacts.some((a) => a.id === selectedVideoArtifact.id)
+    ) {
+      setSelectedVideoArtifact(firstVideo)
+    }
+    if (
+      !selectedVisualArtifact ||
+      !artifacts.some((a) => a.id === selectedVisualArtifact.id)
+    ) {
+      setSelectedVisualArtifact(firstVisual)
+    }
+    if (
+      !selectedMapVisualArtifact ||
+      !mapVisualArtifacts.some((a) => a.id === selectedMapVisualArtifact.id)
+    ) {
+      setSelectedMapVisualArtifact(firstMapVisual)
+    }
+  }, [detail, activeTab, activeGtIndex])
+
+  const handleScore = async (score: number) => {
     if (!detail || isUpdating) return
 
     setIsUpdating(true)
@@ -88,7 +213,8 @@ export default function ReviewPage() {
         await updateReview({
           slice_id: detail.slice.id,
           gt_version_id: null,
-          result,
+          result: 'unknown',
+          score,
         })
       } else {
         const gtData = detail.gt_data[activeGtIndex]
@@ -96,16 +222,77 @@ export default function ReviewPage() {
           await updateReview({
             slice_id: detail.slice.id,
             gt_version_id: gtData.gt_version.id,
-            result,
+            result: 'unknown',
+            score,
           })
         }
       }
       await loadDetail()
 
-      // Auto advance to next if pass
-      if (result === 'pass' && detail.navigation.next_id) {
+      // Auto advance to next if scored
+      if (score > 0 && detail.navigation.next_id) {
         navigate(buildReviewPath(detail.navigation.next_id))
       }
+    } catch (err) {
+      console.error('Failed to update review:', err)
+    } finally {
+      setIsUpdating(false)
+    }
+  }
+
+  const handleDifficulty = async (difficulty: DifficultyLevel) => {
+    if (!detail || isUpdating) return
+    setIsUpdating(true)
+    try {
+      if (activeTab === 'preprocessing') {
+        await updateReview({
+          slice_id: detail.slice.id,
+          gt_version_id: null,
+          result: 'unknown',
+          difficulty,
+        })
+      } else {
+        const gtData = detail.gt_data[activeGtIndex]
+        if (gtData) {
+          await updateReview({
+            slice_id: detail.slice.id,
+            gt_version_id: gtData.gt_version.id,
+            result: 'unknown',
+            difficulty,
+          })
+        }
+      }
+      await loadDetail()
+    } catch (err) {
+      console.error('Failed to update difficulty:', err)
+    } finally {
+      setIsUpdating(false)
+    }
+  }
+
+  const handleUndecidable = async () => {
+    if (!detail || isUpdating) return
+    setIsUpdating(true)
+    try {
+      if (activeTab === 'preprocessing') {
+        await updateReview({
+          slice_id: detail.slice.id,
+          gt_version_id: null,
+          result: 'undecidable',
+          is_undecidable: true,
+        })
+      } else {
+        const gtData = detail.gt_data[activeGtIndex]
+        if (gtData) {
+          await updateReview({
+            slice_id: detail.slice.id,
+            gt_version_id: gtData.gt_version.id,
+            result: 'undecidable',
+            is_undecidable: true,
+          })
+        }
+      }
+      await loadDetail()
     } catch (err) {
       console.error('Failed to update review:', err)
     } finally {
@@ -174,32 +361,100 @@ export default function ReviewPage() {
       </div>
 
       <div className="detail-stage">
-        <div className="detail-layout">
+        <div className="detail-layout review-layout">
           {/* Main content area */}
           <div className="image-container">
-            <div className="image-wrapper">
-              {selectedArtifact ? (
-                <div className="image-panel" style={{ width: '100%' }}>
-                  {selectedArtifact.file_type === 'image' ? (
-                    <img
-                      src={getArtifactUrl(selectedArtifact.id)}
-                      alt={selectedArtifact.file_name}
-                      className="image-frame"
-                      style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                    />
-                  ) : (
+            <div
+              className="image-wrapper"
+              onWheel={handleZoomWheel}
+              onMouseDown={handlePanStart}
+              onMouseMove={handlePanMove}
+              onMouseUp={handlePanEnd}
+              onMouseLeave={handlePanEnd}
+              onDoubleClick={handleResetView}
+              style={{ cursor: isSpaceDown ? (isDragging ? 'grabbing' : 'grab') : 'default' }}
+            >
+              <div className="image-split">
+                <div className="image-panel">
+                  {selectedVideoArtifact ? (
                     <video
-                      src={getArtifactUrl(selectedArtifact.id)}
+                      src={getArtifactUrl(selectedVideoArtifact.id)}
                       controls
                       style={{ maxWidth: '100%', maxHeight: '100%' }}
                     />
+                  ) : (
+                    <div style={{ color: 'var(--muted)', padding: 48 }}>
+                      No video available
+                    </div>
                   )}
                 </div>
-              ) : (
-                <div style={{ color: 'var(--muted)', padding: 48 }}>
-                  No previewable files
+                <div className="image-panel">
+                  {selectedIntensityArtifact ? (
+                    <img
+                      src={getArtifactUrl(selectedIntensityArtifact.id)}
+                      alt={selectedIntensityArtifact.file_name}
+                      className="image-frame"
+                      style={{
+                        maxWidth: '100%',
+                        maxHeight: '100%',
+                        objectFit: 'contain',
+                        transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                        transformOrigin: 'center center',
+                      }}
+                    />
+                  ) : (
+                    <div style={{ color: 'var(--muted)', padding: 48 }}>
+                      No intensity image
+                    </div>
+                  )}
                 </div>
-              )}
+                <div className="image-panel">
+                  {activeTab === 'gt' && detail.gt_data[activeGtIndex]?.gt_version.gt_type === 'RF' ? (
+                    selectedMapVisualArtifact ? (
+                      <img
+                        src={getArtifactUrl(selectedMapVisualArtifact.id)}
+                        alt={selectedMapVisualArtifact.file_name}
+                        className="image-frame"
+                        style={{
+                          maxWidth: '100%',
+                          maxHeight: '100%',
+                          objectFit: 'contain',
+                          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                          transformOrigin: 'center center',
+                        }}
+                      />
+                    ) : (
+                      <div style={{ color: 'var(--muted)', padding: 48 }}>
+                        No visualize image
+                      </div>
+                    )
+                  ) : (
+                    <div style={{ color: 'var(--muted)', padding: 48 }}>
+                      Pointcloud view (coming soon)
+                    </div>
+                  )}
+                </div>
+                <div className="image-panel">
+                  {selectedVisualArtifact ? (
+                    <img
+                      src={getArtifactUrl(selectedVisualArtifact.id)}
+                      alt={selectedVisualArtifact.file_name}
+                      className="image-frame"
+                      style={{
+                        maxWidth: '100%',
+                        maxHeight: '100%',
+                        objectFit: 'contain',
+                        transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                        transformOrigin: 'center center',
+                      }}
+                    />
+                  ) : (
+                    <div style={{ color: 'var(--muted)', padding: 48 }}>
+                      No visualize image
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="image-nav">
                 <button
@@ -223,7 +478,7 @@ export default function ReviewPage() {
           </div>
 
           {/* Review panel */}
-          <div className="score-sidebar">
+          <div className="score-sidebar review-sidebar">
             <div className="card score-card">
               <div className="card-title">Review Type</div>
 
@@ -236,7 +491,17 @@ export default function ReviewPage() {
                     const prepArtifacts = detail.preprocessing.artifacts.filter(
                       (a) => a.file_type === 'image' || a.file_type === 'video'
                     )
-                    if (prepArtifacts.length > 0) setSelectedArtifact(prepArtifacts[0])
+                    const intensityArtifacts = detail.preprocessing.artifacts.filter(
+                      (a) => a.file_type === 'image'
+                    )
+                    const firstIntensity = intensityArtifacts.find(
+                      (a) => a.category.includes('map/IMG_INTENSITY') || a.category.includes('map/INTENSITY')
+                    ) || intensityArtifacts[0] || null
+                    const firstVideo = prepArtifacts.find((a) => a.file_type === 'video') || null
+                    const firstVisual = prepArtifacts.find((a) => a.category.includes('map/visualize')) || null
+                    setSelectedIntensityArtifact(firstIntensity)
+                    setSelectedVideoArtifact(firstVideo)
+                    setSelectedVisualArtifact(firstVisual)
                   }}
                   style={{ flex: 1, padding: '8px 12px' }}
                 >
@@ -245,15 +510,25 @@ export default function ReviewPage() {
                 {detail.gt_data.length > 0 && (
                   <button
                     className={`btn ${activeTab === 'gt' ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() => {
-                      setActiveTab('gt')
-                      const gtArtifacts = detail.gt_data[activeGtIndex]?.artifacts.filter(
-                        (a) => a.file_type === 'image' || a.file_type === 'video'
-                      ) || []
-                      if (gtArtifacts.length > 0) setSelectedArtifact(gtArtifacts[0])
-                    }}
-                    style={{ flex: 1, padding: '8px 12px' }}
-                  >
+                  onClick={() => {
+                    setActiveTab('gt')
+                    const gtArtifacts = detail.gt_data[activeGtIndex]?.artifacts.filter(
+                      (a) => a.file_type === 'image' || a.file_type === 'video'
+                    ) || []
+                    const intensityArtifacts = detail.preprocessing.artifacts.filter(
+                      (a) => a.file_type === 'image'
+                    )
+                    const firstIntensity = intensityArtifacts.find(
+                      (a) => a.category.includes('map/IMG_INTENSITY') || a.category.includes('map/INTENSITY')
+                    ) || intensityArtifacts[0] || null
+                    const firstVideo = gtArtifacts.find((a) => a.file_type === 'video') || null
+                    const firstVisual = gtArtifacts.find((a) => a.file_name.endsWith('_rf_gt.jpg')) || null
+                    setSelectedIntensityArtifact(firstIntensity)
+                    setSelectedVideoArtifact(firstVideo)
+                    setSelectedVisualArtifact(firstVisual)
+                  }}
+                  style={{ flex: 1, padding: '8px 12px' }}
+                >
                     GT ({detail.gt_data.length})
                   </button>
                 )}
@@ -271,7 +546,17 @@ export default function ReviewPage() {
                       const gtArtifacts = detail.gt_data[idx]?.artifacts.filter(
                         (a) => a.file_type === 'image' || a.file_type === 'video'
                       ) || []
-                      if (gtArtifacts.length > 0) setSelectedArtifact(gtArtifacts[0])
+                      const intensityArtifacts = detail.preprocessing.artifacts.filter(
+                        (a) => a.file_type === 'image'
+                      )
+                      const firstIntensity = intensityArtifacts.find(
+                        (a) => a.category.includes('map/IMG_INTENSITY') || a.category.includes('map/INTENSITY')
+                      ) || intensityArtifacts[0] || null
+                      const firstVideo = gtArtifacts.find((a) => a.file_type === 'video') || null
+                      const firstVisual = gtArtifacts.find((a) => a.file_name.endsWith('_rf_gt.jpg')) || null
+                      setSelectedIntensityArtifact(firstIntensity)
+                      setSelectedVideoArtifact(firstVideo)
+                      setSelectedVisualArtifact(firstVisual)
                     }}
                     style={{ width: '100%' }}
                   >
@@ -287,137 +572,91 @@ export default function ReviewPage() {
               {/* Current status */}
               <div style={{ marginBottom: 16, padding: 12, background: 'var(--bg)', borderRadius: 'var(--radius-sm)' }}>
                 <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 4 }}>Current Status</div>
-                <span
-                  className="status-badge"
-                  style={{
-                    background:
-                      currentReview?.result === 'pass'
-                        ? 'rgba(34, 197, 94, 0.1)'
-                        : currentReview?.result === 'fail'
-                        ? 'rgba(239, 68, 68, 0.1)'
-                        : 'rgba(148, 163, 184, 0.2)',
-                    color:
-                      currentReview?.result === 'pass'
-                        ? '#15803d'
-                        : currentReview?.result === 'fail'
-                        ? '#dc2626'
-                        : '#64748b',
-                  }}
-                >
-                  {currentReview?.result === 'pass'
-                    ? 'Pass'
-                    : currentReview?.result === 'fail'
-                    ? 'Fail'
-                    : 'Not Reviewed'}
-                </span>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {currentReview?.is_undecidable ? (
+                    <span className="score-tag">N</span>
+                  ) : currentReview?.score !== null && currentReview?.score !== undefined ? (
+                    <span className="score-tag" data-score={currentReview.score}>
+                      {currentReview.score}
+                    </span>
+                  ) : (
+                    <span className="score-tag">Not Reviewed</span>
+                  )}
+                  <span
+                    className="difficulty-tag"
+                    data-difficulty={currentReview?.difficulty || 'default'}
+                  >
+                    {currentReview?.difficulty || 'default'}
+                  </span>
+                </div>
               </div>
 
               {/* Review buttons */}
-              <div className="card-title">Review Result</div>
+              <div className="card-title">Score</div>
               <div className="score-grid">
-                <button
-                  className={`score-btn ${currentReview?.result === 'pass' ? 'active' : ''}`}
-                  data-score="4"
-                  onClick={() => handleReview('pass')}
-                  disabled={isUpdating}
-                >
-                  <div className="score-number">✓</div>
-                  <div className="score-label">Pass (1)</div>
-                </button>
-                <button
-                  className={`score-btn ${currentReview?.result === 'fail' ? 'active' : ''}`}
-                  data-score="1"
-                  onClick={() => handleReview('fail')}
-                  disabled={isUpdating}
-                >
-                  <div className="score-number">✗</div>
-                  <div className="score-label">Fail (2)</div>
-                </button>
-                <button
-                  className="score-btn score-undecidable"
-                  onClick={() => handleReview('unknown')}
-                  disabled={isUpdating}
-                >
-                  <div className="score-number">?</div>
-                  <div className="score-label">Reset (0)</div>
-                </button>
-              </div>
-            </div>
-
-            {/* Artifacts list */}
-            <div className="card difficulty-card">
-              <div className="card-title">Files</div>
-              <div className="difficulty-grid" style={{ maxHeight: 200, overflow: 'auto' }}>
-                {displayableArtifacts.map((artifact) => (
+                {[0, 1, 2, 3, 4, 5].map((score) => (
                   <button
-                    key={artifact.id}
-                    className={`difficulty-btn ${selectedArtifact?.id === artifact.id ? 'active' : ''}`}
-                    onClick={() => setSelectedArtifact(artifact)}
-                    style={{ textAlign: 'left', padding: '8px 12px' }}
+                    key={score}
+                    className={`score-btn ${
+                      currentReview?.score === score && !currentReview?.is_undecidable ? 'active' : ''
+                    }`}
+                    data-score={score === 0 ? undefined : score}
+                    onClick={() => handleScore(score)}
+                    disabled={isUpdating}
                   >
-                    <div style={{ fontSize: 12, fontWeight: 500 }}>{artifact.category}</div>
-                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
-                      {artifact.file_type}
-                    </div>
+                    <div className="score-number">{score}</div>
+                    <div className="score-label">{score === 0 ? 'Default (0)' : `Score (${score})`}</div>
                   </button>
                 ))}
-                {displayableArtifacts.length === 0 && (
-                  <div style={{ color: 'var(--muted)', fontSize: 13, padding: 8 }}>
-                    No previewable files
-                  </div>
-                )}
+                <button
+                  className={`score-btn score-undecidable ${currentReview?.is_undecidable ? 'active' : ''}`}
+                  onClick={handleUndecidable}
+                  disabled={isUpdating}
+                >
+                  <div className="score-number">N</div>
+                  <div className="score-label">Undecidable (N)</div>
+                </button>
+              </div>
+            </div>
+
+            <div className="card difficulty-card">
+              <div className="card-title">Difficulty</div>
+              <div className="difficulty-grid">
+                {(Object.keys(difficultyLabels) as DifficultyLevel[]).map((level) => (
+                  <button
+                    key={level}
+                    className={`difficulty-btn ${currentReview?.difficulty === level ? 'active' : ''}`}
+                    data-difficulty={level}
+                    onClick={() => handleDifficulty(level)}
+                    disabled={isUpdating}
+                  >
+                    {difficultyLabels[level]}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
 
-          {/* Info panel */}
-          <div className="detail-sidebar">
-            <div className="card">
-              <div className="card-title">Slice Info</div>
-              <div className="info-row">
-                <span className="info-label">License Plate</span>
-                <span className="info-value">{detail.session.license_plate}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Date</span>
-                <span className="info-value">{detail.session.date}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-label">Software Version</span>
-                <span className="info-value">{detail.processing_version.software_version}</span>
-              </div>
-              <div className="info-row" style={{ border: 'none' }}>
-                <span className="info-label">Slice</span>
-                <span className="info-value" style={{ fontSize: 11 }}>
-                  {detail.slice.slice_name}
-                </span>
-              </div>
-            </div>
-
-            <div className="card">
-              <div className="card-title">Shortcuts</div>
-              <div className="shortcut-grid">
-                <div className="shortcut-row">
-                  <span className="kbd">1</span>Pass
-                </div>
-                <div className="shortcut-row">
-                  <span className="kbd">2</span>Fail
-                </div>
-                <div className="shortcut-row">
-                  <span className="kbd">0</span>Reset
-                </div>
-                <div className="shortcut-row">
-                  <span className="kbd">Tab</span>Switch Type
-                </div>
-                <div className="shortcut-row">
-                  <span className="kbd">←</span>Previous
-                </div>
-                <div className="shortcut-row">
-                  <span className="kbd">→</span>Next
-                </div>
-              </div>
-            </div>
-          </div>
+        </div>
+      </div>
+      <div className="shortcut-bar">
+        <div className="shortcut-row">
+          <span className="kbd">1-5</span>Score
+        </div>
+        <div className="shortcut-row">
+          <span className="kbd">0</span>Default
+        </div>
+        <div className="shortcut-row">
+          <span className="kbd">N</span>Undecidable
+        </div>
+        <div className="shortcut-row">
+          <span className="kbd">Tab</span>Switch Type
+        </div>
+        <div className="shortcut-row">
+          <span className="kbd">←</span>Previous
+        </div>
+        <div className="shortcut-row">
+          <span className="kbd">→</span>Next
         </div>
       </div>
     </div>

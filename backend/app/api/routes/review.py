@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, Query, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from pathlib import Path
 
@@ -27,7 +27,7 @@ def build_review_payload(review: Review | None):
     result = review.result or "unknown"
     if review.is_undecidable:
         result = "undecidable"
-    elif review.score is not None:
+    elif review.score is not None and review.score > 0:
         result = "scored"
 
     return {
@@ -281,8 +281,8 @@ async def update_review(
         )
 
     # Validate score
-    if score is not None and (score < 1 or score > 5):
-        raise HTTPException(status_code=400, detail="Invalid score. Must be 1-5")
+    if score is not None and (score < 0 or score > 5):
+        raise HTTPException(status_code=400, detail="Invalid score. Must be 0-5")
 
     # Validate difficulty
     if difficulty is not None and difficulty not in DIFFICULTY_LEVELS:
@@ -302,7 +302,8 @@ async def update_review(
             review.comment = comment
         if score is not None:
             review.score = score
-            review.is_undecidable = False
+            if score > 0:
+                review.is_undecidable = False
         if is_undecidable is not None:
             review.is_undecidable = is_undecidable
             if is_undecidable:
@@ -312,7 +313,7 @@ async def update_review(
         review.result = "unknown"
         if review.is_undecidable:
             review.result = "undecidable"
-        elif review.score is not None:
+        elif review.score is not None and review.score > 0:
             review.result = "scored"
         else:
             review.result = result
@@ -335,7 +336,7 @@ async def update_review(
         if review.is_undecidable:
             review.score = None
             review.result = "undecidable"
-        elif review.score is not None:
+        elif review.score is not None and review.score > 0:
             review.result = "scored"
         db.add(review)
 
@@ -357,6 +358,7 @@ async def update_review(
 @router.get("/artifact/{artifact_id}/file")
 async def get_artifact_file(
     artifact_id: int,
+    request: Request,
     token: str | None = Query(None),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
@@ -393,5 +395,38 @@ async def get_artifact_file(
         media_type = "image/png"
     elif ext == ".mp4":
         media_type = "video/mp4"
+
+    if ext == ".mp4":
+        range_header = request.headers.get("range")
+        print(
+            f"[video] artifact_id={artifact_id} path={file_path} range={range_header}"
+        )
+        if range_header:
+            file_size = file_path.stat().st_size
+            bytes_range = range_header.replace("bytes=", "").split("-")
+            try:
+                start = int(bytes_range[0])
+            except ValueError:
+                start = 0
+            end = int(bytes_range[1]) if bytes_range[1] else file_size - 1
+            end = min(end, file_size - 1)
+            chunk_size = end - start + 1
+
+            def iter_file():
+                with file_path.open("rb") as f:
+                    f.seek(start)
+                    yield f.read(chunk_size)
+
+            headers = {
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(chunk_size),
+            }
+            return StreamingResponse(
+                iter_file(),
+                status_code=206,
+                media_type=media_type,
+                headers=headers,
+            )
 
     return FileResponse(file_path, media_type=media_type)

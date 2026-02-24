@@ -20,6 +20,7 @@ Backend (from `backend/`):
 - `pip install -r requirements.txt` installs runtime deps.
 - `uvicorn app.main:app --reload --port 8000` runs the API server.
 - Optional dev deps (pytest/ruff) are defined in `pyproject.toml`.
+- Default SQLite DB path is `backend/data/labelscore.db` when running from `backend/`.
 
 ## Coding Style & Naming Conventions
 - TypeScript uses 2-space indentation (default Vite/ESLint) and React component files end in `.tsx`.
@@ -37,3 +38,6 @@ Backend (from `backend/`):
 ## Agent Notes
 - Keep changes scoped: update `README.md` and `AGENTS.md` when adding new commands or tooling.
 - Avoid committing large files in `data/` unless explicitly required.
+- Processing version directories are now named like `tmp_ld_annotatorv0311_run-000`; processing date/time are read from `run.log` (first line).
+- Scans can optionally sync-delete missing slices/artifacts when rescanning.
+- Review media endpoints accept `token` query param for img/video auth and support HTTP Range for MP4 streaming.
